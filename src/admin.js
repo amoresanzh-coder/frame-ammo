@@ -109,26 +109,196 @@ function formView(p) {
     <div><label>Категория</label><select name="category">${CATS.map((c) => `<option ${c === v.category ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
     <div><label>Год</label><input name="year" value="${esc(v.year)}" /></div>
     <div class="full"><label>Описание</label><textarea name="description">${esc(v.description)}</textarea></div>
-    <div class="full"><label>URL изображения</label><input name="image" placeholder="https://… или /images/photo.jpg" value="${esc(v.image)}" /></div>
+    <div class="full">
+  <label>Фото / видео</label>
+
+  <input
+    type="file"
+    id="mediaFile"
+    accept="image/*,video/*"
+  />
+
+  <input
+    type="hidden"
+    name="image"
+    value="${esc(v.image)}"
+  />
+
+  ${v.image ? `
+    <div style="margin-top:12px">
+      <a href="${esc(v.image)}" target="_blank" rel="noopener">
+        Текущий файл ↗
+      </a>
+    </div>
+  ` : ''}
+
+  <small style="display:block;margin-top:8px;opacity:.6">
+    JPG, PNG, WebP, MP4, MOV и другие поддерживаемые форматы
+  </small>
+</div>
     <div><label>URL проекта</label><input name="link" value="${esc(v.link)}" /></div>
     <div><label>Порядок</label><input name="order" type="number" value="${esc(v.order)}" /></div>
     <div class="full check"><input type="checkbox" id="act" name="active" ${v.active ? 'checked' : ''} /><label for="act">Активен (показывать на сайте)</label></div>
     <div class="full"><button class="btn solid" type="submit">${edit ? 'Сохранить изменения' : 'Добавить проект'}</button></div>
   </form>`, edit ? '/portfolio' : '/add-project')
   document.getElementById('pf').onsubmit = async (e) => {
-    e.preventDefault()
-    const f = new FormData(e.target)
-    const data = {
-      title: f.get('title').trim(), category: f.get('category'), description: f.get('description').trim(),
-      year: f.get('year').trim(), image: f.get('image').trim(), link: f.get('link').trim(),
-      order: Number(f.get('order')) || 0, active: f.get('active') === 'on', updatedAt: serverTimestamp(),
-    }
-    const btn = e.target.querySelector('[type=submit]'); btn.disabled = true
+  e.preventDefault()
+
+  const fileInput = document.getElementById('mediaFile')
+  const file = fileInput?.files?.[0]
+  const btn = e.target.querySelector('[type=submit]')
+
+  if (file) {
+    btn.disabled = true
+    btn.textContent = 'Подготовка…'
+
     try {
-      if (edit) { await updateDoc(doc(db, 'portfolio', p.id), data); await load(); toast('Изменения сохранены'); location.hash = '#/portfolio' }
-      else { await addDoc(collection(db, 'portfolio'), { ...data, createdAt: serverTimestamp() }); await load(); toast('Проект добавлен'); formView() }
-    } catch { toast('Ошибка сохранения. Проверьте права доступа.'); btn.disabled = false }
+      const cloudName = 'ughyqrvw'
+      const uploadPreset = 'frame_ammo'
+      const chunkSize = 20 * 1024 * 1024 // 20 MB
+
+      // Уникальный ID именно для этой загрузки
+      const uploadId =
+        `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
+      let offset = 0
+      let result = null
+
+      while (offset < file.size) {
+        const chunk = file.slice(
+          offset,
+          Math.min(offset + chunkSize, file.size)
+        )
+
+        const end = offset + chunk.size - 1
+
+        const formData = new FormData()
+        formData.append('file', chunk)
+        formData.append('upload_preset', uploadPreset)
+
+        const response = await fetch(
+          `https://api.cloudinary.com/v1_1/${cloudName}/auto/upload`,
+          {
+            method: 'POST',
+            headers: {
+              'X-Unique-Upload-Id': uploadId,
+              'Content-Range': `bytes ${offset}-${end}/${file.size}`,
+            },
+            body: formData,
+          }
+        )
+
+        if (!response.ok) {
+          const errorText = await response.text()
+          console.error('Cloudinary response:', errorText)
+          throw new Error(
+            `Cloudinary upload failed: ${response.status}`
+          )
+        }
+
+        result = await response.json()
+
+        offset += chunk.size
+
+        const progress = Math.round(
+          (offset / file.size) * 100
+        )
+
+        btn.textContent = `Загрузка… ${progress}%`
+      }
+
+      if (!result?.secure_url) {
+        throw new Error('Cloudinary did not return a URL')
+      }
+
+      // Сохраняем URL
+      e.target.querySelector('[name="image"]').value =
+        result.secure_url
+
+      // Сохраняем тип: image или video
+      e.target.dataset.mediaType =
+        result.resource_type
+
+      btn.textContent = 'Загружено ✓'
+
+    } catch (error) {
+      console.error(
+        'CLOUDINARY UPLOAD ERROR:',
+        error
+      )
+
+      toast(
+        'Не удалось загрузить файл в Cloudinary'
+      )
+
+      btn.disabled = false
+      btn.textContent = edit
+        ? 'Сохранить изменения'
+        : 'Добавить проект'
+
+      return
+    }
   }
+
+  const f = new FormData(e.target)
+
+  const data = {
+    title: f.get('title').trim(),
+    category: f.get('category'),
+    description: f.get('description').trim(),
+    year: f.get('year').trim(),
+    image: f.get('image').trim(),
+    mediaType:
+      e.target.dataset.mediaType ||
+      p?.mediaType ||
+      'image',
+    link: f.get('link').trim(),
+    order: Number(f.get('order')) || 0,
+    active: f.get('active') === 'on',
+    updatedAt: serverTimestamp(),
+  }
+
+  btn.disabled = true
+
+  try {
+    if (edit) {
+      await updateDoc(
+        doc(db, 'portfolio', p.id),
+        data
+      )
+
+      await load()
+
+      toast('Изменения сохранены')
+
+      location.hash = '#/portfolio'
+
+    } else {
+      await addDoc(
+        collection(db, 'portfolio'),
+        {
+          ...data,
+          createdAt: serverTimestamp(),
+        }
+      )
+
+      await load()
+
+      toast('Проект добавлен')
+
+      formView()
+    }
+
+  } catch (error) {
+    console.error('FIRESTORE ERROR:', error)
+
+    toast(
+      'Ошибка сохранения. Проверьте права доступа.'
+    )
+
+    btn.disabled = false
+  }
+}
 }
 
 function settingsView() {
